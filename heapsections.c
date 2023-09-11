@@ -27,13 +27,6 @@ static struct hblk* GetNextFreeBlock(ptr_t ptr)
 
 static void CallHeapSectionCallback(void* user_data, ptr_t start, ptr_t end, GC_heap_section_proc callback)
 {
-	hdr *hhdr = HDR(start);
-
-	// Validate that the heap block is valid, then fire our callback.
-	if (IS_FORWARDING_ADDR_OR_NIL(hhdr) || HBLK_IS_FREE(hhdr)) {
-		return;
-	}
-	
 	callback(user_data, start, end);
 }
 
@@ -51,7 +44,7 @@ void GC_foreach_heap_section(void* user_data, GC_heap_section_proc callback)
 	{
 		ptr_t sectionStart = GC_heap_sects[i].hs_start;
 		ptr_t sectionEnd = sectionStart + GC_heap_sects[i].hs_bytes;
-       
+
 		/* Merge in contiguous sections. Copied from GC_dump_regions
 
 		A free block might start in one heap section and extend
@@ -66,19 +59,38 @@ void GC_foreach_heap_section(void* user_data, GC_heap_section_proc callback)
 
 		while (sectionStart < sectionEnd)
 		{
-			nextFreeBlock = GetNextFreeBlock(sectionStart);
-
-			if (nextFreeBlock == NULL || (ptr_t)nextFreeBlock > sectionEnd)
+			hdr *hhdr = HDR(sectionStart);
+			if (IS_FORWARDING_ADDR_OR_NIL(hhdr))
 			{
-				CallHeapSectionCallback(user_data, sectionStart, sectionEnd, callback);
-				break;
+				sectionStart += HBLKSIZE;
+				continue;
+			}
+			if (HBLK_IS_FREE(hhdr))
+			{
+				sectionStart += hhdr -> hb_sz;
 			}
 			else
 			{
-				size_t sectionLength = (char*)nextFreeBlock - sectionStart;
-				if (sectionLength > 0)
-					CallHeapSectionCallback(user_data, sectionStart, sectionStart + sectionLength, callback);
-				sectionStart = (char*)nextFreeBlock + HDR(nextFreeBlock)->hb_sz;
+				ptr_t blockEnd = sectionStart + HBLKSIZE * OBJ_SZ_TO_BLOCKS(hhdr -> hb_sz);
+				while (sectionStart < blockEnd)
+				{
+					nextFreeBlock = GetNextFreeBlock(sectionStart);
+
+					if (nextFreeBlock == NULL || (ptr_t)nextFreeBlock > blockEnd)
+					{
+						CallHeapSectionCallback(user_data, sectionStart, blockEnd, callback);
+						break;
+					}
+					else
+					{
+						size_t sectionLength = (char*)nextFreeBlock - sectionStart;
+						if (sectionLength > 0)
+							CallHeapSectionCallback(user_data, sectionStart, sectionStart + sectionLength, callback);
+						sectionStart = (char*)nextFreeBlock + HDR(nextFreeBlock)->hb_sz;
+					}
+				}
+
+				sectionStart = blockEnd;
 			}
 		}
 	}
